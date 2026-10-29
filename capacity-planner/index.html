@@ -185,6 +185,14 @@ dialog::backdrop{background:rgb(10 15 12 / .45)}
 .fld textarea{resize:vertical;min-height:60px}
 .inline-chk{display:flex;align-items:center;gap:8px;font-weight:600}
 .err{color:var(--over);font-size:13px;margin:0}
+.slots-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.slots-head span{font-size:12px;color:var(--muted)}
+.slots-head span.warn{color:var(--warn)} .slots-head span.over{color:var(--over)}
+.slots{display:flex;flex-direction:column;gap:6px}
+.slot-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 72px 32px;gap:6px;align-items:center}
+.slot-row select,.slot-row input{border:1px solid var(--line-strong);border-radius:var(--r);background:var(--bg);padding:6px 8px;min-width:0;width:100%;box-sizing:border-box}
+.slots .none{font-size:13px;color:var(--muted);margin:0}
+.bl-item .hrs b{color:var(--fg);font-weight:600}
 .team-list{display:flex;flex-direction:column;gap:8px}
 .team-row{display:grid;grid-template-columns:30px minmax(0,1.3fr) minmax(0,1fr) 70px auto;gap:8px;align-items:center}
 .team-row input{border:1px solid var(--line-strong);border-radius:var(--r);background:var(--bg);padding:6px 8px;min-width:0;width:100%;box-sizing:border-box}
@@ -254,7 +262,7 @@ dialog::backdrop{background:rgb(10 15 12 / .45)}
         </div>
       </div>
       <div class="backlog" id="backlog" data-drop="backlog"></div>
-      <p class="hint">Drag a job onto a person and day. Drag it back here to unschedule. Double-click an empty slot to add a job there.</p>
+      <p class="hint">Drag a job onto a person and day. A big job stays here until all its hours are booked, so drop it on as many days as it needs. Drag a day back here to unbook it.</p>
     </aside>
     <section class="gridwrap" id="gridwrap"><div id="grid"></div></section>
   </main>
@@ -269,10 +277,14 @@ dialog::backdrop{background:rgb(10 15 12 / .45)}
       <div class="fld full"><label for="jTitle">Job</label><input id="jTitle" placeholder="e.g. Year-end accounts FY 2025/26" autocomplete="off"></div>
       <div class="fld"><label for="jHours">Estimated hours</label><input id="jHours" type="number" min="0" step="0.25" inputmode="decimal"></div>
       <div class="fld"><label for="jDeadline">Deadline</label><input id="jDeadline" type="date"></div>
-      <div class="fld"><label for="jAssignee">Who</label><select id="jAssignee"></select></div>
-      <div class="fld"><label for="jDate">Day booked</label><input id="jDate" type="date"></div>
+      <div class="fld"><label for="jAssignee">Main person</label><select id="jAssignee"></select></div>
+      <label class="inline-chk" style="align-self:end;padding-bottom:8px"><input type="checkbox" id="jDone"> Done</label>
+      <div class="fld full">
+        <div class="slots-head"><label>Days booked</label><span id="jBooked" class="num"></span></div>
+        <div id="jSlots" class="slots"></div>
+        <div><button type="button" class="btn" id="jAddSlot">+ Add a day</button></div>
+      </div>
       <div class="fld full"><label for="jNotes">Notes</label><textarea id="jNotes" rows="2"></textarea></div>
-      <label class="inline-chk full"><input type="checkbox" id="jDone"> Done</label>
     </div>
     <p class="err" id="jErr" hidden></p>
   </div>
@@ -408,12 +420,21 @@ function makeDemo(){
   let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const pick = a => a[Math.floor(rnd() * a.length)];
   const jobs = {}; let n = 0;
-  const add = o => { const t = o.type; jobs['ex-job-' + (n++)] = { client:'', title:titles[t], hours:TYPE[t].hrs, deadline:null, assignee:null, date:null, done:false, notes:'', ...o }; };
+  const add = o => {
+    const t = o.type, j = { client:'', title:titles[t], hours:TYPE[t].hrs, deadline:null, assignee:null, date:null, done:false, notes:'', ...o };
+    j.slots = j.date ? [{ id:'s0', m:j.assignee, d:j.date, h:j.hours }] : [];
+    delete j.date; jobs['ex-job-' + (n++)] = j;
+  };
   const wk = monday(new Date());
+  // one bigger job spread over Mon, Wed and Thu next week
+  jobs['ex-split'] = { client:'Aldous Property Ltd', title:'Group accounts and CT600s', type:'acc', hours:20, deadline:iso(addDays(wk, 30)), assignee:'ex2', done:false, notes:'',
+    slots:[{id:'s1', m:'ex2', d:iso(addDays(wk, 7)), h:7.5}, {id:'s2', m:'ex2', d:iso(addDays(wk, 9)), h:7.5}, {id:'s3', m:'ex2', d:iso(addDays(wk, 10)), h:5}] };
   for (let w = 0; w < 2; w++) for (let d = 0; d < 5; d++) {
     const day = addDays(wk, w*7 + d), date = iso(day);
     for (const m of Object.keys(team)) {
       if (m === 'ex2' && w === 1 && d === 4) { add({type:'leave', client:'Tom Ellis', assignee:m, date}); continue; }
+      if (m === 'ex2' && w === 1 && (d === 0 || d === 2)) continue;
+      if (m === 'ex2' && w === 1 && d === 3) { add({type:'vat', client:'Fenwick Bakery', hours:1.5, assignee:m, date, deadline:iso(addDays(day, 9))}); continue; }
       if (m === 'ex5' && d > 2) continue;
       let budget = team[m].hpd * (0.45 + rnd() * 0.8), count = 0;
       while (budget > 0.4 && count < 4) {
@@ -457,6 +478,17 @@ function write(kind, id, body, op){
   });
 }
 const newId = kind => mode === 'live' ? db.collection(kind).doc().id : 'local-' + Math.random().toString(36).slice(2, 10);
+
+/* A job is booked as one or more slots: {id, m: person, d: day, h: hours}. */
+function slotsOf(j){
+  if (Array.isArray(j.slots)) return j.slots;
+  return j.date && j.assignee ? [{ id:'s0', m:j.assignee, d:j.date, h:+j.hours || 0 }] : [];
+}
+const round2 = n => Math.round(n * 100) / 100;
+const bookedH = j => round2(slotsOf(j).reduce((s, x) => s + (+x.h || 0), 0));
+const leftH = j => Math.max(0, round2((+j.hours || 0) - bookedH(j)));
+const newSlotId = () => 's' + Math.random().toString(36).slice(2, 8);
+const sortSlots = slots => slots.slice().sort((a, b) => a.d.localeCompare(b.d) || String(a.m).localeCompare(b.m));
 
 /* ---------- helpers ---------- */
 function sortedTeam(team){
@@ -523,10 +555,12 @@ function renderStats(days){
   let cap = 0; for (const m of Object.values(team)) cap += (+m.hpd || 0) * workDays;
   let booked = 0, unN = 0, unH = 0, overdue = 0, lateBooked = 0;
   for (const j of Object.values(jobs)) {
-    if (j.date && set.has(j.date) && j.assignee && team[j.assignee]) booked += +j.hours || 0;
-    if (!j.done && !j.date && j.type !== 'leave') { unN++; unH += +j.hours || 0; }
+    const slots = slotsOf(j);
+    for (const s of slots) if (set.has(s.d) && team[s.m]) booked += +s.h || 0;
+    const left = leftH(j);
+    if (!j.done && left > 0 && j.type !== 'leave') { unN++; unH += left; }
     if (!j.done && j.deadline && j.deadline < TODAY && j.type !== 'leave') overdue++;
-    if (!j.done && j.deadline && j.date && j.date > j.deadline) lateBooked++;
+    if (!j.done && j.deadline && slots.some(s => s.d > j.deadline)) lateBooked++;
   }
   const r = cap ? booked / cap : 0;
   el.innerHTML = `
@@ -551,17 +585,17 @@ function renderBacklog(){
   const { team, jobs } = cur();
   const el = $('#backlog');
   if (mode === 'loading') { el.innerHTML = '<div class="empty-note">Loading jobs…</div>'; $('#blCount').textContent = ''; return; }
-  let list = Object.entries(jobs).filter(([, j]) => !j.date && !j.done && matchesFilter(j));
+  let list = Object.entries(jobs).filter(([, j]) => !j.done && leftH(j) > 0 && matchesFilter(j));
   if (prefs.due !== 'all') list = list.filter(([, j]) => {
     if (!j.deadline) return false;
     const n = diffDays(TODAY, j.deadline);
     return prefs.due === 'overdue' ? n < 0 : n <= +prefs.due;
   });
   list.sort((a, b) => (a[1].deadline || '9999') .localeCompare(b[1].deadline || '9999') || String(a[1].client).localeCompare(b[1].client));
-  const hrs = list.reduce((s, [, j]) => s + (+j.hours || 0), 0);
+  const hrs = list.reduce((s, [, j]) => s + leftH(j), 0);
   $('#blCount').textContent = `${list.length} · ${fmtH(hrs)}h`;
   if (!list.length) {
-    const any = Object.values(jobs).some(j => !j.date && !j.done);
+    const any = Object.values(jobs).some(j => !j.done && leftH(j) > 0);
     el.innerHTML = `<div class="empty-note">${any ? 'No unscheduled jobs match these filters.' : 'Nothing waiting to be scheduled. Add a job or import a list from Engager.'}</div>`;
     return;
   }
@@ -569,19 +603,20 @@ function renderBacklog(){
   el.innerHTML = list.slice(0, LIMIT).map(([id, j]) => {
     const t = typeOf(j.type), m = j.assignee && team[j.assignee];
     return `<div class="bl-item" draggable="true" tabindex="0" data-job="${esc(id)}" style="--tc:var(--t-${t.k})" title="${esc(j.client)} — ${esc(j.title || t.label)}">
-      <span class="cl">${esc(j.client || 'Untitled')}</span><span class="hrs">${fmtH(j.hours)}h</span>
+      <span class="cl">${esc(j.client || 'Untitled')}</span><span class="hrs">${bookedH(j) > 0 ? `<b>${fmtH(leftH(j))}h</b> of ${fmtH(j.hours)}h left` : `${fmtH(j.hours)}h`}</span>
       <span class="meta"><span class="tag">${esc(t.label)}</span>${j.title && j.title !== t.label ? `<span class="ti">${esc(j.title)}</span>` : ''}${m ? `<span class="who" style="background:${avColor(j.assignee)}" title="${esc(m.name)}">${esc(initials(m.name))}</span>` : ''}${dueBadge(j)}</span>
     </div>`;
   }).join('') + (list.length > LIMIT ? `<div class="empty-note">${list.length - LIMIT} more. Search or filter to narrow the list.</div>` : '');
 }
 
-function chipHTML(id, j, dim){
+function chipHTML(id, j, slot, idx, n, dim){
   const t = typeOf(j.type);
-  const late = !j.done && j.deadline && j.date && j.date > j.deadline;
-  const sub = late ? `Late: due ${fmtShort(j.deadline)}` : (j.title || t.label);
-  const tip = `${j.client || 'Untitled'} — ${j.title || t.label}\n${t.label} · ${fmtH(j.hours)}h${j.deadline ? ` · due ${fmtShort(j.deadline)}` : ''}${j.done ? ' · done' : ''}`;
-  return `<div class="chip${j.done ? ' done' : ''}${late ? ' late' : ''}${j.type === 'leave' ? ' leave' : ''}${dim ? ' dim' : ''}" draggable="true" tabindex="0" data-job="${esc(id)}" style="--tc:var(--t-${t.k})" title="${esc(tip)}">
-    <span class="c1"><span class="cl">${esc(j.type === 'leave' ? (j.title || 'Leave') : (j.client || 'Untitled'))}</span><span class="h">${fmtH(j.hours)}h</span></span>
+  const late = !j.done && j.deadline && slot.d > j.deadline;
+  const part = n > 1 ? `Day ${idx + 1} of ${n} · ` : '';
+  const sub = late ? `Late: due ${fmtShort(j.deadline)}` : part + (j.title || t.label);
+  const tip = `${j.client || 'Untitled'} — ${j.title || t.label}\n${t.label} · ${fmtH(slot.h)}h this day${n > 1 || bookedH(j) !== +j.hours ? ` (${fmtH(bookedH(j))} of ${fmtH(j.hours)}h booked over ${n} day${n > 1 ? 's' : ''})` : ''}${j.deadline ? ` · due ${fmtShort(j.deadline)}` : ''}${j.done ? ' · done' : ''}`;
+  return `<div class="chip${j.done ? ' done' : ''}${late ? ' late' : ''}${j.type === 'leave' ? ' leave' : ''}${dim ? ' dim' : ''}" draggable="true" tabindex="0" data-job="${esc(id)}" data-slot="${esc(slot.id)}" style="--tc:var(--t-${t.k})" title="${esc(tip)}">
+    <span class="c1"><span class="cl">${esc(j.type === 'leave' ? (j.title || 'Leave') : (j.client || 'Untitled'))}</span><span class="h">${fmtH(slot.h)}h</span></span>
     <span class="c2">${esc(sub)}</span></div>`;
 }
 
@@ -610,7 +645,8 @@ function renderGrid(days){
   const dayIsos = days.map(iso), set = new Set(dayIsos);
   const byCell = {}, dues = {};
   for (const [id, j] of Object.entries(jobs)) {
-    if (j.date && set.has(j.date) && j.assignee && team[j.assignee]) (byCell[j.assignee + '|' + j.date] ||= []).push([id, j]);
+    const slots = sortSlots(slotsOf(j));
+    slots.forEach((s, i) => { if (set.has(s.d) && team[s.m]) (byCell[s.m + '|' + s.d] ||= []).push([id, j, s, i, slots.length]); });
     if (j.deadline && !j.done && j.type !== 'leave' && set.has(j.deadline)) dues[j.deadline] = (dues[j.deadline] || 0) + 1;
   }
   const flt = filtering();
@@ -622,7 +658,7 @@ function renderGrid(days){
   const workDays = days.filter(d => !isWeekend(d)).length;
   for (const [mid, m] of members) {
     const hpd = +m.hpd || 0;
-    let tot = 0; for (const s of dayIsos) for (const [, j] of (byCell[mid + '|' + s] || [])) tot += +j.hours || 0;
+    let tot = 0; for (const s of dayIsos) for (const [, , sl] of (byCell[mid + '|' + s] || [])) tot += +sl.h || 0;
     const cap = hpd * workDays, r = cap ? tot / cap : (tot ? 2 : 0);
     parts.push(`<div class="rowhead"><span class="av" style="background:${avColor(mid)}">${esc(initials(m.name))}</span>
       <span class="rh-txt"><span class="nm">${esc(m.name)}</span><span class="rl">${esc(m.role || '')}</span>
@@ -630,13 +666,13 @@ function renderGrid(days){
     days.forEach((d, i) => {
       const s = dayIsos[i];
       const list = (byCell[mid + '|' + s] || []).sort((a, b) => (a[1].done - b[1].done) || (a[1].type === 'leave' ? -1 : 0) - (b[1].type === 'leave' ? -1 : 0) || String(a[1].client).localeCompare(b[1].client));
-      const load = list.reduce((x, [, j]) => x + (+j.hours || 0), 0);
+      const load = list.reduce((x, [, , sl]) => x + (+sl.h || 0), 0);
       const dcap = isWeekend(d) ? 0 : hpd, rr = dcap ? load / dcap : (load ? 2 : 0);
       const lvCls = rr > 1.0001 ? ' over' : rr >= 0.85 ? ' warn' : '';
       const out = compact && d.getMonth() !== anchor.getMonth();
       parts.push(`<div class="cell${s === TODAY ? ' today' : ''}${isWeekend(d) ? ' weekend' : ''}${out ? ' out' : ''}" data-m="${esc(mid)}" data-d="${s}">
         <span class="lv${lvCls}">${load ? `${fmtH(load)}/${fmtH(dcap)}` : ''}</span>
-        ${list.map(([id, j]) => chipHTML(id, j, flt && !matchesFilter(j))).join('')}
+        ${list.map(([id, j, sl, i, n]) => chipHTML(id, j, sl, i, n, flt && !matchesFilter(j))).join('')}
         <span class="load"><i class="${fillCls(rr)}" style="width:${Math.min(100, rr*100)}%"></i></span></div>`);
     });
   }
@@ -644,18 +680,54 @@ function renderGrid(days){
 }
 
 /* ---------- moving jobs ---------- */
-function moveJob(id, assignee, date){
-  const j = cur().jobs[id]; if (!j) return;
-  if (j.assignee === assignee && j.date === date) return;
-  write('jobs', id, { assignee, date, updatedAt: Date.now() }, 'update');
+function saveSlots(id, slots, extra){
+  write('jobs', id, { slots, date:null, ...(extra || {}), updatedAt: Date.now() }, 'update');
   if (mode === 'live') schedule();
 }
+function freeHours(m, d){
+  const { team, jobs } = cur();
+  const cap = isWeekend(fromIso(d)) ? 0 : (+(team[m] && team[m].hpd) || 0);
+  let used = 0;
+  for (const j of Object.values(jobs)) for (const s of slotsOf(j)) if (s.m === m && s.d === d) used += +s.h || 0;
+  return round2(cap - used);
+}
+const dayName = d => { const x = fromIso(d); return `${DAY[x.getDay()]} ${x.getDate()} ${MON[x.getMonth()]}`; };
 
-let dragId = null, overEl = null;
+// Chip dragged to another cell: move that day's booking (merging if the job is already on that day).
+function moveSlot(id, slotId, m, d){
+  const j = cur().jobs[id]; if (!j) return;
+  let slots = slotsOf(j).map(s => ({ ...s }));
+  const s = slots.find(x => x.id === slotId); if (!s || (s.m === m && s.d === d)) return;
+  const same = slots.find(x => x !== s && x.m === m && x.d === d);
+  if (same) { same.h = round2(+same.h + +s.h); slots = slots.filter(x => x !== s); }
+  else { s.m = m; s.d = d; }
+  saveSlots(id, slots);
+}
+// Job dragged from the list: book what's left, up to the time that person has free that day.
+function bookFromList(id, m, d){
+  const { team, jobs } = cur(); const j = jobs[id]; if (!j) return;
+  const left = leftH(j);
+  if (left <= 0) { toast('All the hours on this job are booked. Open it to change the days.'); return; }
+  const free = freeHours(m, d), hpd = +(team[m] && team[m].hpd) || left;
+  const h = round2(free >= 0.25 ? Math.min(left, free) : Math.min(left, hpd));
+  const slots = slotsOf(j).map(s => ({ ...s }));
+  const same = slots.find(x => x.m === m && x.d === d);
+  if (same) same.h = round2(+same.h + h); else slots.push({ id:newSlotId(), m, d, h });
+  saveSlots(id, slots, j.assignee && team[j.assignee] ? null : { assignee:m });
+  const rem = round2(left - h);
+  toast(`Booked ${fmtH(h)}h for ${team[m].name.split(' ')[0]} on ${dayName(d)}. ${rem > 0 ? `${fmtH(rem)}h still to book — drop it on another day.` : 'Job fully booked.'}`);
+}
+function unbookSlot(id, slotId){
+  const j = cur().jobs[id]; if (!j) return;
+  saveSlots(id, slotsOf(j).filter(s => s.id !== slotId));
+  toast('Day unbooked. The hours are back in Unscheduled.');
+}
+
+let dragId = null, dragSlot = null, overEl = null;
 function setOver(el){ if (overEl === el) return; overEl && overEl.classList.remove('over'); overEl = el; el && el.classList.add('over'); }
 document.addEventListener('dragstart', e => {
   const c = e.target.closest && e.target.closest('[data-job]'); if (!c) return;
-  dragId = c.dataset.job;
+  dragId = c.dataset.job; dragSlot = c.dataset.slot || null;
   try { e.dataTransfer.setData('text/plain', dragId); e.dataTransfer.effectAllowed = 'move'; } catch (er) {}
   requestAnimationFrame(() => c.classList.add('dragging'));
 });
@@ -671,11 +743,11 @@ document.addEventListener('drop', e => {
   const t = e.target.closest && e.target.closest('.cell,[data-drop="backlog"]');
   if (!t) return;
   e.preventDefault();
-  const id = dragId, j = cur().jobs[id];
-  setOver(null); dragId = null;
-  if (!j) return;
-  if (t.classList.contains('cell')) moveJob(id, t.dataset.m, t.dataset.d);
-  else moveJob(id, j.assignee || null, null);
+  const id = dragId, slotId = dragSlot;
+  setOver(null); dragId = null; dragSlot = null;
+  if (!cur().jobs[id]) return;
+  if (t.classList.contains('cell')) { if (slotId) moveSlot(id, slotId, t.dataset.m, t.dataset.d); else bookFromList(id, t.dataset.m, t.dataset.d); }
+  else if (slotId) unbookSlot(id, slotId);
 });
 
 /* ---------- job dialog ---------- */
@@ -685,33 +757,91 @@ function fillSelects(){
   $('#typeFilter').innerHTML = `<option value="all">All job types</option>` + TYPES.filter(t => t.k !== 'leave').map(t => `<option value="${t.k}">${esc(t.label)}</option>`).join('');
   $('#typeFilter').value = prefs.type; $('#dueFilter').value = prefs.due;
 }
+let editSlots = [], slotsTouched = false;
+function memberOptions(sel){
+  return sortedTeam(cur().team).map(([mid, m]) => `<option value="${esc(mid)}"${mid === sel ? ' selected' : ''}>${esc(m.name)}</option>`).join('');
+}
+function renderSlotRows(){
+  const el = $('#jSlots');
+  el.innerHTML = editSlots.length ? sortSlots(editSlots).map(s => `<div class="slot-row" data-sid="${esc(s.id)}">
+      <select class="s-m" aria-label="Person">${memberOptions(s.m)}</select>
+      <input class="s-d" type="date" value="${esc(s.d)}" aria-label="Day">
+      <input class="s-h" type="number" min="0" step="0.25" inputmode="decimal" value="${esc(s.h)}" aria-label="Hours that day">
+      <button type="button" class="btn icon" data-rm-slot aria-label="Remove this day">&times;</button></div>`).join('')
+    : '<p class="none">Not booked yet. Add days here, or drag the job from Unscheduled onto the planner.</p>';
+  updateBooked();
+}
+function updateBooked(){
+  const est = parseFloat($('#jHours').value) || 0, booked = round2(editSlots.reduce((a, s) => a + (+s.h || 0), 0));
+  const b = $('#jBooked'), diff = round2(est - booked);
+  b.className = 'num' + (diff < 0 ? ' over' : diff > 0 && booked > 0 ? ' warn' : '');
+  b.textContent = !editSlots.length ? '' : diff > 0 ? `${fmtH(booked)} of ${fmtH(est)}h booked · ${fmtH(diff)}h to go` : diff < 0 ? `${fmtH(booked)}h booked · ${fmtH(-diff)}h over the estimate` : `${fmtH(booked)}h booked across ${editSlots.length} day${editSlots.length > 1 ? 's' : ''}`;
+}
+$('#jSlots').addEventListener('input', e => {
+  const row = e.target.closest('[data-sid]'); if (!row) return;
+  const s = editSlots.find(x => x.id === row.dataset.sid); if (!s) return;
+  slotsTouched = true;
+  if (e.target.classList.contains('s-m')) s.m = e.target.value;
+  if (e.target.classList.contains('s-d')) s.d = e.target.value;
+  if (e.target.classList.contains('s-h')) s.h = parseFloat(e.target.value) || 0;
+  updateBooked();
+});
+$('#jSlots').addEventListener('click', e => {
+  const b = e.target.closest('[data-rm-slot]'); if (!b) return;
+  editSlots = editSlots.filter(x => x.id !== b.closest('[data-sid]').dataset.sid);
+  slotsTouched = true; renderSlotRows();
+});
+$('#jAddSlot').addEventListener('click', () => {
+  const team = cur().team, members = sortedTeam(team);
+  if (!members.length) { toast('Add your team first, then book days.'); return; }
+  const m = $('#jAssignee').value || (editSlots.length ? sortSlots(editSlots).slice(-1)[0].m : members[0][0]);
+  let d;
+  if (editSlots.length) { d = fromIso(sortSlots(editSlots).slice(-1)[0].d || TODAY); do d = addDays(d, 1); while (isWeekend(d)); }
+  else { d = fromIso(TODAY); while (isWeekend(d)) d = addDays(d, 1); }
+  const est = parseFloat($('#jHours').value) || 0, booked = editSlots.reduce((a, s) => a + (+s.h || 0), 0);
+  const hpd = +(team[m] && team[m].hpd) || 7.5, left = round2(est - booked);
+  editSlots.push({ id:newSlotId(), m, d:iso(d), h: left > 0 ? Math.min(left, hpd) : hpd });
+  slotsTouched = true; renderSlotRows();
+});
 function openJob(id, preset){
   const { team, jobs } = cur();
-  editing = id || null; hoursTouched = !!id;
-  const j = id ? jobs[id] : { client:'', title:'', type:'acc', hours:TYPE.acc.hrs, deadline:null, assignee:null, date:null, done:false, notes:'', ...(preset || {}) };
+  editing = id || null; hoursTouched = !!id; slotsTouched = !!id;
+  const j = id ? jobs[id] : { client:'', title:'', type:'acc', hours:TYPE.acc.hrs, deadline:null, assignee:null, done:false, notes:'', ...(preset || {}) };
   $('#jobTitle').textContent = id ? 'Edit job' : 'New job';
-  $('#jAssignee').innerHTML = `<option value="">Not assigned</option>` + sortedTeam(team).map(([mid, m]) => `<option value="${esc(mid)}">${esc(m.name)}</option>`).join('');
+  $('#jAssignee').innerHTML = `<option value="">Not assigned</option>` + memberOptions();
   $('#jClient').value = j.client || ''; $('#jTitle').value = j.title || ''; $('#jType').value = TYPE[j.type] ? j.type : 'adv';
   $('#jHours').value = j.hours ?? ''; $('#jDeadline').value = j.deadline || ''; $('#jAssignee').value = j.assignee && team[j.assignee] ? j.assignee : '';
-  $('#jDate').value = j.date || ''; $('#jNotes').value = j.notes || ''; $('#jDone').checked = !!j.done;
+  $('#jNotes').value = j.notes || ''; $('#jDone').checked = !!j.done;
+  editSlots = id ? slotsOf(j).map(s => ({ ...s })) : (preset && preset.date ? [{ id:newSlotId(), m:preset.assignee, d:preset.date, h:+j.hours || 0 }] : []);
+  renderSlotRows();
   $('#jErr').hidden = true;
-  $('#jDelete').hidden = !id; $('#jUnschedule').hidden = !id || !j.date;
+  $('#jDelete').hidden = !id; $('#jUnschedule').hidden = !id || !editSlots.length;
   disarm($('#jDelete'), 'Delete');
   $('#dlgJob').showModal();
   if (!id) $('#jClient').focus();
 }
-$('#jHours').addEventListener('input', () => { hoursTouched = true; });
-$('#jType').addEventListener('change', () => { if (!hoursTouched) $('#jHours').value = typeOf($('#jType').value).hrs; });
+// On a new job booked into one slot, keep that slot's hours in step with the estimate until the user edits the days.
+function syncSingleSlot(){ if (!slotsTouched && editSlots.length === 1) { editSlots[0].h = parseFloat($('#jHours').value) || 0; renderSlotRows(); } else updateBooked(); }
+$('#jHours').addEventListener('input', () => { hoursTouched = true; syncSingleSlot(); });
+$('#jType').addEventListener('change', () => { if (!hoursTouched) { $('#jHours').value = typeOf($('#jType').value).hrs; syncSingleSlot(); } });
 $('#jobForm').addEventListener('submit', e => {
   e.preventDefault();
-  const type = $('#jType').value, client = $('#jClient').value.trim(), assignee = $('#jAssignee').value || null, date = $('#jDate').value || null;
+  const type = $('#jType').value, client = $('#jClient').value.trim(), team = cur().team;
   const err = msg => { $('#jErr').textContent = msg; $('#jErr').hidden = false; };
   if (!client && type !== 'leave') return err('Add the client name.');
-  if (date && !assignee) return err("Pick who's doing it, or clear the day booked.");
   const hours = parseFloat($('#jHours').value);
   if (!(hours >= 0)) return err('Estimated hours must be a number, for example 1.5.');
+  for (const s of editSlots) {
+    if (!s.m || !team[s.m]) return err('Each booked day needs a person.');
+    if (!s.d) return err('Each booked day needs a date.');
+    if (!(+s.h > 0)) return err('Each booked day needs some hours, for example 7.5.');
+  }
+  // merge duplicate person+day rows
+  const merged = [];
+  for (const s of sortSlots(editSlots)) { const x = merged.find(y => y.m === s.m && y.d === s.d); if (x) x.h = round2(+x.h + +s.h); else merged.push({ id:s.id, m:s.m, d:s.d, h:round2(+s.h) }); }
+  const assignee = $('#jAssignee').value || (merged[0] ? merged[0].m : null);
   const prev = editing ? cur().jobs[editing] : null;
-  const body = { client, title:$('#jTitle').value.trim(), type, hours, deadline:$('#jDeadline').value || null, assignee, date, done:$('#jDone').checked, notes:$('#jNotes').value.trim(), createdAt: prev?.createdAt || Date.now(), updatedAt: Date.now() };
+  const body = { client, title:$('#jTitle').value.trim(), type, hours, deadline:$('#jDeadline').value || null, assignee, slots:merged, date:null, done:$('#jDone').checked, notes:$('#jNotes').value.trim(), createdAt: prev?.createdAt || Date.now(), updatedAt: Date.now() };
   write('jobs', editing || newId('jobs'), body, 'set');
   $('#dlgJob').close(); toast(editing ? 'Job saved' : 'Job added'); if (mode === 'live') schedule();
 });
@@ -722,7 +852,7 @@ $('#jDelete').addEventListener('click', () => {
   if (!b.dataset.armed) return arm(b, 'Click again to delete');
   write('jobs', editing, null, 'delete'); $('#dlgJob').close(); toast('Job deleted');
 });
-$('#jUnschedule').addEventListener('click', () => { moveJob(editing, $('#jAssignee').value || null, null); $('#dlgJob').close(); toast('Moved back to Unscheduled'); });
+$('#jUnschedule').addEventListener('click', () => { saveSlots(editing, []); $('#dlgJob').close(); toast('All days unbooked. The job is back in Unscheduled.'); });
 
 /* ---------- team dialog ---------- */
 function renderTeamList(){
@@ -751,7 +881,7 @@ $('#teamList').addEventListener('click', e => {
   const b = e.target.closest('[data-remove]'); if (!b) return;
   if (!b.dataset.armed) return arm(b, 'Confirm');
   const mid = b.closest('[data-mid]').dataset.mid;
-  for (const [id, j] of Object.entries(cur().jobs)) if (j.assignee === mid) write('jobs', id, { assignee:null, date:null, updatedAt:Date.now() }, 'update');
+  for (const [id, j] of Object.entries(cur().jobs)) { const sl = slotsOf(j); if (j.assignee === mid || sl.some(x => x.m === mid)) write('jobs', id, { slots: sl.filter(x => x.m !== mid), date:null, assignee: j.assignee === mid ? null : j.assignee, updatedAt:Date.now() }, 'update'); }
   write('team', mid, null, 'delete');
   toast('Removed. Their jobs are back in Unscheduled.');
   renderTeamList();
@@ -810,7 +940,7 @@ $('#impGo').addEventListener('click', async () => {
   $('#impGo').disabled = true; $('#impGo').textContent = 'Importing…';
   const now = Date.now();
   for (let i = 0; i < rows.length; i += 10) {
-    await Promise.all(rows.slice(i, i + 10).map(r => write('jobs', newId('jobs'), { client:r.client, title:r.title, type:r.type, hours:r.hours, deadline:r.deadline, assignee:r.assignee, date:null, done:false, notes:'', createdAt:now, updatedAt:now }, 'set')));
+    await Promise.all(rows.slice(i, i + 10).map(r => write('jobs', newId('jobs'), { client:r.client, title:r.title, type:r.type, hours:r.hours, deadline:r.deadline, assignee:r.assignee, slots:[], done:false, notes:'', createdAt:now, updatedAt:now }, 'set')));
   }
   $('#dlgImport').close(); $('#impText').value = ''; $('#impPreview').innerHTML = ''; parsed = [];
   toast(`Imported ${rows.length} job${rows.length > 1 ? 's' : ''} into Unscheduled`);
